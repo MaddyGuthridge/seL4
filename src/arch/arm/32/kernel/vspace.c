@@ -53,6 +53,8 @@
 #define ATTRINDX_NONCACHEABLE 0x0  /* strongly ordered or device memory */
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
 
+static void setGlobalPD(void);
+
 struct resolve_ret {
     paddr_t frameBase;
     vm_page_size_t frameSize;
@@ -548,7 +550,7 @@ BOOT_CODE void activate_kernel_vspace(void)
        that everything we've written (particularly the kernel page tables)
        is committed. */
     cleanInvalidateL1Caches();
-    setCurrentPD(addrFromKPPtr(armKSGlobalPD));
+    setGlobalPD();
     invalidateLocalTLB();
     lockTLBEntry(PPTR_BASE);
     lockTLBEntry(PPTR_VECTOR_TABLE);
@@ -1000,19 +1002,20 @@ bool_t CONST isIOSpaceFrameCap(cap_t cap)
 /** Switch to the empty PD on the reserved HW ASID */
 static void setGlobalPD(void)
 {
-    /* dsb/isb analogous to armv_contextSwitch_HWASID() */
+#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
+    writeContextIDAndPD(hwASIDReserved, addrFromKPPtr(armUSGlobalPD));
+#else
+    /* Before changing the PD ensure all memory accesses have completed */
     dsb();
     /* First switch to global PD on old ASID. Stale TLB entries may exist
        under the old ASID, but no new stale mappings can be added any more. */
-#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
-    setCurrentPD(addrFromKPPtr(armUSGlobalPD));
-#else
-    setCurrentPD(addrFromKPPtr(armKSGlobalPD));
-#endif
+    writeTTBR0Ptr(addrFromKPPtr(armKSGlobalPD));
+    /* Ensure the PD switch completes before we do anything else */
     isb();
     /* Switch to reserved HW ASID. Only empty/global kernel mappings are
        now available from the TLB. */
     setHardwareASID(hwASIDReserved);
+#endif
 }
 
 void setVMRoot(tcb_t *tcb)
